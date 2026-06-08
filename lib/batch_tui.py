@@ -165,19 +165,33 @@ def _sub2api_provider(cfg: RuntimeConfig) -> Sub2ApiExportProvider:
 def _run_one(index: int, base_cfg: RuntimeConfig, artifact_root: Path, events: "queue.Queue[dict[str, Any]]", *, retries: int) -> None:
     max_attempts = max(1, int(retries or 1))
     last_failure: dict[str, Any] = {}
+    reusable_account_id = ""
+    reusable_email = ""
     for attempt in range(1, max_attempts + 1):
         task_dir = artifact_root / f"task_{index:04d}" / f"attempt_{attempt:02d}"
+        progress = _task_progress(events, index)
+
+        def capture_progress(message: str, data: dict[str, Any] | None = None) -> None:
+            nonlocal reusable_account_id, reusable_email
+            payload = data if isinstance(data, dict) else {}
+            if "账号已准备" in str(message):
+                if payload.get("id"):
+                    reusable_account_id = str(payload.get("id") or "")
+                if payload.get("email"):
+                    reusable_email = str(payload.get("email") or "")
+            progress(message, data)
+
         cfg = replace(
             base_cfg,
-            existing_account_id="",
-            idp_email="",
+            existing_account_id=reusable_account_id,
+            idp_email=reusable_email if reusable_account_id else "",
             idp_given_name="",
             idp_family_name="",
             artifact_dir=task_dir,
         )
         events.put({"type": "started", "index": index, "attempt": attempt, "max_attempts": max_attempts, "artifact_dir": str(task_dir), "ts": utc_now_iso()})
         try:
-            result = run_single(cfg, progress=_task_progress(events, index))
+            result = run_single(cfg, progress=capture_progress)
             events.put({"type": "success", "index": index, "attempt": attempt, "result": redact(result), "ts": utc_now_iso()})
             return
         except IdpTeamAutomationError as exc:
