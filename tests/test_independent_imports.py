@@ -36,11 +36,15 @@ def test_expected_tree_exists():
         "lib/codex_oauth.py",
         "lib/sso_http_flow.py",
         "lib/sub2api_export.py",
+        "lib/sub2api_health.py",
+        "lib/reauthorize_sub2api_errors.py",
         "lib/logging_utils.py",
         "lib/errors.py",
         "lib/batch_tui.py",
         "scripts/run_idp_codex.py",
         "scripts/run_batch_tui.py",
+        "scripts/check_sub2api_group.py",
+        "scripts/reauthorize_sub2api_errors.py",
     ]
     for rel in expected:
         assert (PROJECT / rel).exists(), rel

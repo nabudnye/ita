@@ -121,6 +121,55 @@ python3 scripts/run_batch_tui.py --count 10 --threads 3 --retries 5 --yes
 python3 scripts/run_batch_tui.py --count 5 --threads 2 --no-sub2api --yes
 ```
 
+## Sub2API 分组错误账号检测
+
+检测 `.env` 中 `SUB2API_GROUP` 指定分组内状态错误的账号：
+
+```bash
+python3 scripts/check_sub2api_group.py
+```
+
+指定分组：
+
+```bash
+python3 scripts/check_sub2api_group.py --group 5
+```
+
+输出 JSON 并保存：
+
+```bash
+python3 scripts/check_sub2api_group.py --group 5 --json --output artifacts/sub2api_group_5_health.json
+```
+
+检测错误账号并生成重新授权计划，默认不更新远端：
+
+```bash
+python3 scripts/reauthorize_sub2api_errors.py --group 5
+```
+
+确认后实际重新授权并更新原 Sub2API 账号：
+
+```bash
+python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply
+```
+
+限制只处理前 3 个错误账号：
+
+```bash
+python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply --limit 3
+```
+
+当前检测结果：
+
+```text
+SUB2API_GROUP=5
+分组账号数：88
+错误账号数：23
+正常账号数：65
+错误状态：error
+主要错误：Token revoked (401)
+```
+
 ## 输出
 
 单账号输出目录：
@@ -166,6 +215,8 @@ lib/
 ├── errors.py           # 项目异常类型
 ├── idp_client.py       # IDP API
 ├── logging_utils.py    # 脱敏 JSONL 日志
+├── reauthorize_sub2api_errors.py # 错误账号重新授权
+├── sub2api_health.py   # Sub2API 分组账号状态检测
 ├── sso_http_flow.py    # 纯 HTTP SSO/OAuth 主流程
 └── sub2api_export.py   # Sub2API 导出
 ```

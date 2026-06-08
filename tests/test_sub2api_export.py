@@ -39,3 +39,45 @@ def test_sub2api_payload_and_push():
     result = provider.push(record)
     assert result["remote_id"] == 99
     assert requests[0][1] == "https://sub.example/api/v1/auth/login"
+
+
+def test_sub2api_update_account_credentials_preserves_existing_fields():
+    requests = []
+
+    def fake_request(method, url, **kwargs):
+        requests.append((method, url, kwargs))
+        if url.endswith("/auth/login"):
+            return {"access_token": "admin_token"}
+        if url.endswith("/admin/accounts/42") and method == "PUT":
+            body = kwargs["json_body"]
+            assert body["name"] == "old@example.com"
+            assert body["concurrency"] == 9
+            assert body["group_ids"] == [5]
+            assert body["credentials"]["refresh_token"] == "new_ref"
+            return {"id": 42}
+        raise AssertionError((method, url))
+
+    provider = Sub2ApiExportProvider(
+        Sub2ApiConfig(url="https://sub.example", email="admin@example.com", password="pw", group="5", concurrency=1),
+        request_json=fake_request,
+    )
+    record = OAuthExportRecord(
+        account_id="acct_2",
+        email="new@example.com",
+        secret={"access_token": "new_acc", "refresh_token": "new_ref", "id_token": "", "client_id": "client_1"},
+    )
+    result = provider.update_account_credentials(
+        42,
+        record,
+        existing={
+            "id": 42,
+            "name": "old@example.com",
+            "platform": "openai",
+            "type": "oauth",
+            "concurrency": 9,
+            "account_groups": [{"group_id": 5}],
+            "extra": {"old": True},
+        },
+    )
+    assert result["remote_action"] == "updated"
+    assert requests[1][0] == "PUT"

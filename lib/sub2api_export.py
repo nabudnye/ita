@@ -268,6 +268,50 @@ class Sub2ApiExportProvider:
             "group_ids": self._group_ids(),
         }
 
+    def get_account(self, account_id: int | str) -> dict[str, Any]:
+        api_base = self._api_base(self.config.url)
+        token = self._login(api_base)
+        data = self.request_json("GET", f"{api_base}/admin/accounts/{account_id}", headers=self._auth_headers(token), timeout=20)
+        if not isinstance(data, dict):
+            raise Sub2ApiError("Sub2API 账号详情返回格式异常", stage="sub2api_account_detail")
+        return data
+
+    def update_account_credentials(self, account_id: int | str, record: OAuthExportRecord, *, existing: dict[str, Any] | None = None) -> dict[str, Any]:
+        api_base = self._api_base(self.config.url)
+        token = self._login(api_base)
+        current = existing if isinstance(existing, dict) else self.request_json("GET", f"{api_base}/admin/accounts/{account_id}", headers=self._auth_headers(token), timeout=20)
+        if not isinstance(current, dict):
+            raise Sub2ApiError("Sub2API 账号详情返回格式异常", stage="sub2api_account_detail")
+        payload = self.build_account_payload(record)
+        for key in ("name", "platform", "type", "concurrency", "priority", "rate_multiplier", "auto_pause_on_expired"):
+            if current.get(key) not in (None, ""):
+                payload[key] = current.get(key)
+        if current.get("account_groups") and not payload.get("group_ids"):
+            group_ids: list[int] = []
+            for rel in current.get("account_groups") or []:
+                if not isinstance(rel, dict):
+                    continue
+                try:
+                    gid = int(rel.get("group_id") or "")
+                except (TypeError, ValueError):
+                    continue
+                if gid > 0 and gid not in group_ids:
+                    group_ids.append(gid)
+            payload["group_ids"] = group_ids
+        if isinstance(current.get("extra"), dict):
+            payload["extra"] = {**current["extra"], **payload.get("extra", {})}
+        updated = self.request_json("PUT", f"{api_base}/admin/accounts/{account_id}", headers=self._auth_headers(token), json_body=payload, timeout=20)
+        if not isinstance(updated, dict):
+            updated = {"id": account_id}
+        return {
+            "status": "success",
+            "provider": self.name,
+            "email": record.email,
+            "account_id": record.account_id,
+            "remote_id": updated.get("id") or account_id,
+            "remote_action": "updated",
+        }
+
     def push(self, record: OAuthExportRecord) -> dict[str, Any]:
         api_base = self._api_base(self.config.url)
         token = self._login(api_base)
