@@ -32,3 +32,7 @@ class OAuthFlowError(IdpTeamAutomationError):
 
 class Sub2ApiError(IdpTeamAutomationError):
     """Sub2API request or response failed."""
+
+
+class CpaApiError(IdpTeamAutomationError):
+    """CLIProxyAPI request or response failed."""

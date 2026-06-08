@@ -13,6 +13,10 @@ from typing import Any
 
 SENSITIVE_MARKERS = (
     "authorization",
+    "management_key",
+    "management-key",
+    "cpa_management_key",
+    "x-management-key",
     "access_token",
     "refresh_token",
     "id_token",
@@ -47,7 +51,7 @@ def redact(value: Any) -> Any:
     if isinstance(value, str):
         # Hide common inline secret patterns without destroying ordinary URLs.
         text = value
-        text = re.sub(r"(?i)(access_token|refresh_token|id_token|token|password|authorization|cookie|code)=([^&\s]+)", r"\1=***REDACTED***", text)
+        text = re.sub(r"(?i)(access_token|refresh_token|id_token|token|password|authorization|cookie|code|cpa_management_key|management_key)=([^&\s]+)", r"\1=***REDACTED***", text)
         text = re.sub(r"(?i)(Bearer\s+)[A-Za-z0-9._\-]+", r"\1***REDACTED***", text)
         return text
     return value

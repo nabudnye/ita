@@ -2,7 +2,7 @@
 # iDP 协议作者：@该隐；注册机作者：@朴圣佑。
 # 二开请保留版权；二开不保留版权，以后写代码都是bug。
 
-"""Command-line orchestration for IDP -> Codex OAuth -> Sub2API."""
+"""Command-line orchestration for IDP -> Codex OAuth -> export targets."""
 from __future__ import annotations
 
 import argparse
@@ -13,6 +13,7 @@ from typing import Any, Callable
 
 from .codex_oauth import generate_oauth_start, public_token_result
 from .config import RuntimeConfig
+from .cpa_export import CpaConfig, CpaExportProvider
 from .errors import IdpTeamAutomationError
 from .idp_client import IdpClient
 from .logging_utils import JsonlLogger, redact, utc_now_iso
@@ -37,7 +38,7 @@ def _progress(message: str, data: dict[str, Any] | None = None) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="IDP 生成账号 -> Codex OAuth refresh token -> Sub2API 推送")
+    parser = argparse.ArgumentParser(description="IDP 生成账号 -> Codex OAuth refresh token -> 导出目标推送")
     parser.add_argument("--idp-base", help="IDP base URL，默认读取 IDP_BASE 或 http://idp.fdvctte.info")
     parser.add_argument("--idp-token", help="IDP 访问码")
     parser.add_argument("--client-id", help="IDP client_id，例如 openai-client3")
@@ -57,6 +58,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sub2api-password", help="Sub2API 管理员密码")
     parser.add_argument("--sub2api-group", help="Sub2API 分组 ID，多个用逗号")
     parser.add_argument("--model-whitelist", help="Sub2API model whitelist，多个用逗号")
+    parser.add_argument("--export-targets", help="导出目标：sub2api / cpa / sub2api,cpa / none；默认读取 EXPORT_TARGETS 或 sub2api")
+    parser.add_argument("--cpa-url", help="CLIProxyAPI base URL")
+    parser.add_argument("--cpa-management-key", help="CLIProxyAPI Management API key")
+    parser.add_argument("--cpa-note", help="CPA auth 文件备注")
     parser.add_argument("--no-sub2api", action="store_true", help="只获取 token，不推送 Sub2API")
     parser.add_argument("--artifact-dir", help="artifact 输出目录，默认 artifacts/idp_codex")
     parser.add_argument("--timeout", help="HTTP timeout 秒数")
@@ -71,6 +76,74 @@ def _write_json(path: str | Path, data: Any) -> None:
     target.write_text(json.dumps(data, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
 
+def _build_export_record(token_config: dict[str, Any], account: Any, cfg: RuntimeConfig) -> OAuthExportRecord:
+    return OAuthExportRecord(
+        account_id=str(token_config.get("account_id") or account.email),
+        email=str(token_config.get("email") or account.email),
+        secret={
+            "access_token": token_config.get("access_token") or "",
+            "refresh_token": token_config.get("refresh_token") or "",
+            "id_token": token_config.get("id_token") or "",
+            "client_id": token_config.get("client_id") or cfg.codex_client_id,
+            "expired": token_config.get("expired") or "",
+            "last_refresh": token_config.get("last_refresh") or "",
+            "account_id": token_config.get("account_id") or "",
+            "user_id": token_config.get("user_id") or "",
+        },
+        metadata={
+            "email": account.email,
+            "source": "idp_codex",
+            "generated_account_id": account.id,
+            "last_refresh": token_config.get("last_refresh") or "",
+            "expired": token_config.get("expired") or "",
+        },
+    )
+
+
+def _export_record(cfg: RuntimeConfig, logger: JsonlLogger, record: OAuthExportRecord, *, progress: ProgressFn | None = None) -> dict[str, dict[str, Any]]:
+    results: dict[str, dict[str, Any]] = {}
+    for target in cfg.selected_export_targets:
+        if target == "sub2api":
+            if progress:
+                progress("步骤 9/10：推送账号到 Sub2API", {"email": record.email})
+            provider = Sub2ApiExportProvider(
+                Sub2ApiConfig(
+                    url=cfg.sub2api_url,
+                    email=cfg.sub2api_email,
+                    password=cfg.sub2api_password,
+                    group=cfg.sub2api_group,
+                    model_whitelist=cfg.sub2api_model_whitelist,
+                    concurrency=cfg.sub2api_concurrency,
+                    priority=cfg.sub2api_priority,
+                    rate_multiplier=cfg.sub2api_rate_multiplier,
+                ),
+                logger=logger,
+            )
+            results[target] = provider.push(record)
+            _write_json(cfg.artifact_dir / "sub2api.public.json", results[target])
+            if progress:
+                progress("Sub2API 推送完成", results[target])
+        elif target == "cpa":
+            if progress:
+                progress("步骤 9/10：上传账号到 CPA", {"email": record.email})
+            provider = CpaExportProvider(
+                CpaConfig(
+                    url=cfg.cpa_url,
+                    management_key=cfg.cpa_management_key,
+                    priority=cfg.cpa_priority,
+                    note=cfg.cpa_note,
+                ),
+                logger=logger,
+            )
+            results[target] = provider.push(record)
+            _write_json(cfg.artifact_dir / "cpa.public.json", results[target])
+            if progress:
+                progress("CPA 上传完成", results[target])
+    if results:
+        _write_json(cfg.artifact_dir / "exports.public.json", results)
+    return results
+
+
 def run(cfg: RuntimeConfig, *, progress: ProgressFn | None = _progress) -> dict[str, Any]:
     cfg.validate()
     cfg.artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -79,9 +152,10 @@ def run(cfg: RuntimeConfig, *, progress: ProgressFn | None = _progress) -> dict[
         progress("步骤 1/10：初始化运行环境", {
             "artifact_dir": str(cfg.artifact_dir),
             "idp_base": cfg.idp_base,
+            "export_targets": list(cfg.selected_export_targets),
             "export_sub2api": cfg.export_sub2api,
         })
-    logger.write("run_start", {"artifact_dir": str(cfg.artifact_dir), "idp_base": cfg.idp_base, "client_id": cfg.idp_client_id, "export_sub2api": cfg.export_sub2api})
+    logger.write("run_start", {"artifact_dir": str(cfg.artifact_dir), "idp_base": cfg.idp_base, "client_id": cfg.idp_client_id, "export_targets": list(cfg.selected_export_targets), "export_sub2api": cfg.export_sub2api})
 
     idp = IdpClient(cfg.idp_base, timeout=cfg.timeout, logger=logger)
     if progress:
@@ -156,47 +230,19 @@ def run(cfg: RuntimeConfig, *, progress: ProgressFn | None = _progress) -> dict[
     token_config = flow.run(start_url=start_url, oauth=oauth, account=account)
     token_public = public_token_result(token_config)
     _write_json(cfg.artifact_dir / "token.public.json", token_public)
+    _write_json(cfg.artifact_dir / "token.json", token_config)
     if progress:
         progress("步骤 8/10：Codex token 获取完成", token_public)
 
+    exports: dict[str, dict[str, Any]] = {}
     sub2api_result: dict[str, Any] | None = None
-    if cfg.export_sub2api:
-        if progress:
-            progress("步骤 9/10：推送账号到 Sub2API", {"email": token_public.get("email") or account.email})
-        record = OAuthExportRecord(
-            account_id=str(token_config.get("account_id") or account.email),
-            email=str(token_config.get("email") or account.email),
-            secret={
-                "access_token": token_config.get("access_token") or "",
-                "refresh_token": token_config.get("refresh_token") or "",
-                "id_token": token_config.get("id_token") or "",
-                "client_id": token_config.get("client_id") or cfg.codex_client_id,
-                "expired": token_config.get("expired") or "",
-                "account_id": token_config.get("account_id") or "",
-                "user_id": token_config.get("user_id") or "",
-            },
-            metadata={"email": account.email, "source": "idp_codex", "generated_account_id": account.id},
-        )
-        provider = Sub2ApiExportProvider(
-            Sub2ApiConfig(
-                url=cfg.sub2api_url,
-                email=cfg.sub2api_email,
-                password=cfg.sub2api_password,
-                group=cfg.sub2api_group,
-                model_whitelist=cfg.sub2api_model_whitelist,
-                concurrency=cfg.sub2api_concurrency,
-                priority=cfg.sub2api_priority,
-                rate_multiplier=cfg.sub2api_rate_multiplier,
-            ),
-            logger=logger,
-        )
-        sub2api_result = provider.push(record)
-        _write_json(cfg.artifact_dir / "sub2api.public.json", sub2api_result)
-        if progress:
-            progress("Sub2API 推送完成", sub2api_result)
+    if cfg.selected_export_targets:
+        record = _build_export_record(token_config, account, cfg)
+        exports = _export_record(cfg, logger, record, progress=progress)
+        sub2api_result = exports.get("sub2api")
     else:
         if progress:
-            progress("步骤 9/10：跳过 Sub2API 推送", {"reason": "--no-sub2api"})
+            progress("步骤 9/10：跳过导出", {"reason": "export_targets=none"})
 
     if progress:
         progress("步骤 10/10：写入最终结果文件", None)
@@ -205,8 +251,10 @@ def run(cfg: RuntimeConfig, *, progress: ProgressFn | None = _progress) -> dict[
         "finished_at": utc_now_iso(),
         "artifact_dir": str(cfg.artifact_dir),
         "account": account.as_public_dict(),
-        "token": token_public,
+        "token": token_config,
+        "token_public": token_public,
         "sub2api": sub2api_result,
+        "exports": exports,
     }
     _write_json(cfg.artifact_dir / "result.json", result)
     logger.write("run_success", result)

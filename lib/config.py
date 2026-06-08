@@ -13,6 +13,7 @@ from typing import Any
 from .errors import ConfigError
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SUPPORTED_EXPORT_TARGETS = ("sub2api", "cpa")
 
 
 def load_dotenv(path: str | Path | None = None, *, override: bool = False) -> dict[str, str]:
@@ -78,6 +79,22 @@ def split_csv(value: Any) -> list[str]:
     return result
 
 
+def normalize_export_targets(value: Any, *, no_sub2api: bool = False) -> tuple[str, ...]:
+    if no_sub2api:
+        return ()
+    raw_items = split_csv("sub2api" if value is None or str(value or "").strip() == "" else value)
+    targets: list[str] = []
+    for raw in raw_items:
+        item = str(raw or "").strip().lower()
+        if item in {"none", "no", "false", "off", "token", "token_only", "token-only", "仅生成token", "仅生成 token"}:
+            continue
+        if item not in SUPPORTED_EXPORT_TARGETS:
+            raise ConfigError(f"未知导出目标：{raw}；支持 sub2api / cpa / none", stage="config")
+        if item not in targets:
+            targets.append(item)
+    return tuple(targets)
+
+
 @dataclass
 class RuntimeConfig:
     idp_base: str = "http://idp.fdvctte.info"
@@ -103,16 +120,32 @@ class RuntimeConfig:
     sub2api_priority: int = 1
     sub2api_rate_multiplier: float = 1.0
 
+    export_targets: tuple[str, ...] = ()
+    cpa_url: str = ""
+    cpa_management_key: str = ""
+    cpa_priority: int = 1
+    cpa_note: str = "Idp Team Automation"
+
     artifact_dir: Path = field(default_factory=lambda: PROJECT_ROOT / "artifacts" / "idp_codex")
     timeout: float = 30.0
     proxy: str = ""
     export_sub2api: bool = True
+
+    @property
+    def selected_export_targets(self) -> tuple[str, ...]:
+        if self.export_targets:
+            return normalize_export_targets(",".join(self.export_targets))
+        return ("sub2api",) if self.export_sub2api else ()
 
     @classmethod
     def from_env_and_args(cls, args: Any) -> "RuntimeConfig":
         load_dotenv()
         artifact = getattr(args, "artifact_dir", None) or env_first("ARTIFACT_DIR", default=str(PROJECT_ROOT / "artifacts" / "idp_codex"))
         proxy = getattr(args, "proxy", None) or env_first("HTTPS_PROXY", "HTTP_PROXY", default="")
+        raw_export_targets = getattr(args, "export_targets", None)
+        if raw_export_targets is None:
+            raw_export_targets = env_first("EXPORT_TARGETS", default="")
+        targets = normalize_export_targets(raw_export_targets or None, no_sub2api=bool(getattr(args, "no_sub2api", False)))
         cfg = cls(
             idp_base=getattr(args, "idp_base", None) or env_first("IDP_BASE", default="http://idp.fdvctte.info"),
             idp_token=getattr(args, "idp_token", None) or env_first("IDP_TOKEN"),
@@ -134,17 +167,23 @@ class RuntimeConfig:
             sub2api_concurrency=parse_int(env_first("SUB2API_CONCURRENCY", default="10"), 10, minimum=1),
             sub2api_priority=parse_int(env_first("SUB2API_PRIORITY", default="1"), 1, minimum=1),
             sub2api_rate_multiplier=parse_float(env_first("SUB2API_RATE_MULTIPLIER", default="1"), 1.0, minimum=0),
+            export_targets=targets,
+            cpa_url=getattr(args, "cpa_url", None) or env_first("CPA_URL"),
+            cpa_management_key=getattr(args, "cpa_management_key", None) or env_first("CPA_MANAGEMENT_KEY"),
+            cpa_priority=parse_int(env_first("CPA_PRIORITY", default="1"), 1, minimum=1),
+            cpa_note=getattr(args, "cpa_note", None) or env_first("CPA_NOTE", default="Idp Team Automation"),
             artifact_dir=(PROJECT_ROOT / artifact) if not str(artifact).startswith("/") else Path(artifact),
             timeout=parse_float(getattr(args, "timeout", None) or env_first("REQUEST_TIMEOUT", default="30"), 30.0, minimum=1.0),
             proxy="" if getattr(args, "no_proxy", False) else proxy,
-            export_sub2api=not bool(getattr(args, "no_sub2api", False)),
+            export_sub2api="sub2api" in targets,
         )
         return cfg
 
     def validate(self) -> None:
         if not self.idp_token:
             raise ConfigError("缺少 IDP 访问码：请传 --idp-token 或设置 IDP_TOKEN", stage="config")
-        if self.export_sub2api:
+        targets = self.selected_export_targets
+        if "sub2api" in targets:
             missing = []
             if not self.sub2api_url:
                 missing.append("SUB2API_URL")
@@ -154,3 +193,11 @@ class RuntimeConfig:
                 missing.append("SUB2API_PASSWORD")
             if missing:
                 raise ConfigError("缺少 Sub2API 配置：" + ", ".join(missing), stage="config")
+        if "cpa" in targets:
+            missing = []
+            if not self.cpa_url:
+                missing.append("CPA_URL")
+            if not self.cpa_management_key:
+                missing.append("CPA_MANAGEMENT_KEY")
+            if missing:
+                raise ConfigError("缺少 CPA 配置：" + ", ".join(missing), stage="config")

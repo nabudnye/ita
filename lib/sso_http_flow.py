@@ -577,5 +577,5 @@ class SSOHttpFlow:
         token_config = self.authorize_codex(oauth, account)
         if not str(token_config.get("refresh_token") or "").strip():
             raise OAuthFlowError("OAuth token 响应缺少 refresh_token", stage="token_exchange", data={"token": redact(token_config)})
-        (self.artifact_dir / "token.private.json").write_text(json.dumps(redact(token_config), ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
+        (self.artifact_dir / "token.private.json").write_text(json.dumps(token_config, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
         return token_config

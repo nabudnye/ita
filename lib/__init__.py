@@ -7,6 +7,7 @@
 __all__ = [
     "codex_oauth",
     "config",
+    "cpa_export",
     "idp_client",
     "sso_http_flow",
     "sub2api_export",

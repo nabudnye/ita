@@ -1,12 +1,12 @@
 # Idp Team Automation
 
-独立 Python 项目：通过 IDP 生成账号，走纯 HTTP 协议完成 ChatGPT SSO / Codex OAuth，获取 Codex refresh token，并写入 Sub2API。
+独立 Python 项目：通过 IDP 生成账号，走纯 HTTP 协议完成 ChatGPT SSO / Codex OAuth，获取 Codex refresh token，并写入 Sub2API 或 CLIProxyAPI（CPA）。
 
 ## 项目简介
 
 Idp Team Automation 是一个基于 OpenAI SSO Bug 的 Team 成员账号开通自动化工具。
 
-项目会自动完成 IDP 账号生成、Team 成员账号开通、Codex 授权 URL 生成、refresh token 获取，并将账号录入 Sub2API。
+项目会自动完成 IDP 账号生成、Team 成员账号开通、Codex 授权 URL 生成、refresh token 获取，并将账号录入配置的导出目标。
 
 IDP API 点数可以直接在线购买：[https://pay.ldxp.cn/item/9isxtv](https://pay.ldxp.cn/item/9isxtv)。
 
@@ -24,7 +24,7 @@ IDP API 点数可以直接在线购买：[https://pay.ldxp.cn/item/9isxtv](https
 
 ## 功能
 
-- 单账号生成、授权、推送 Sub2API。
+- 单账号生成、授权、推送 Sub2API / CPA。
 - 批量多线程 TUI：
   - 输入账号数量和线程数。
   - 每个任务失败最多重试 5 次；注册账号一旦生成成功，后续重试会复用同一个 IDP account_id，避免重复消耗点数。
@@ -98,6 +98,7 @@ IDP_TOKEN=
 SUB2API_URL=
 SUB2API_EMAIL=
 SUB2API_PASSWORD=
+EXPORT_TARGETS=sub2api
 ```
 
 可选：
@@ -107,15 +108,29 @@ IDP_CLIENT_ID=
 IDP_CHANNEL_ID=
 IDP_DOMAIN=
 SUB2API_MODEL_WHITELIST=
+CPA_URL=
+CPA_MANAGEMENT_KEY=
 REQUEST_TIMEOUT=60
 ```
 
 ## 单账号运行
 
-生成新账号并推送 Sub2API：
+生成新账号并推送默认导出目标（默认 Sub2API）：
 
 ```bash
 python3 scripts/run_idp_codex.py --timeout 60
+```
+
+只推送 CPA：
+
+```bash
+python3 scripts/run_idp_codex.py --timeout 60 --export-targets cpa
+```
+
+同时推送 Sub2API 和 CPA：
+
+```bash
+python3 scripts/run_idp_codex.py --timeout 60 --export-targets sub2api,cpa
 ```
 
 复用已有 IDP account_id：
@@ -128,6 +143,8 @@ python3 scripts/run_idp_codex.py --account-id 1638 --timeout 60
 
 ```bash
 python3 scripts/run_idp_codex.py --timeout 60 --no-sub2api
+# 或
+python3 scripts/run_idp_codex.py --timeout 60 --export-targets none
 ```
 
 ## 统一 TUI
@@ -163,6 +180,8 @@ python3 scripts/run_batch_tui.py --mode register --count 10 --threads 3 --retrie
 
 ```bash
 python3 scripts/run_batch_tui.py --mode register --count 5 --threads 2 --no-sub2api --yes
+# 或
+python3 scripts/run_batch_tui.py --mode register --count 5 --threads 2 --export-targets none --yes
 ```
 
 重新补授权非交互：
@@ -288,6 +307,7 @@ lib/
 ├── cli.py              # 单账号 CLI 编排
 ├── codex_oauth.py      # PKCE / OAuth URL / token 解析
 ├── config.py           # .env 和 CLI 配置
+├── cpa_export.py       # CLIProxyAPI auth 文件导出
 ├── errors.py           # 项目异常类型
 ├── idp_client.py       # IDP API
 ├── logging_utils.py    # 脱敏 JSONL 日志

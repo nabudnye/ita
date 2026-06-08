@@ -142,6 +142,7 @@ def _reauthorize_one(
     token_config = flow.run(start_url=start_url, oauth=oauth, account=account)
     token_public = public_token_result(token_config)
     _write_json(artifact_dir / "token.public.json", token_public)
+    (artifact_dir / "token.json").write_text(json.dumps(token_config, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding="utf-8")
 
     record = OAuthExportRecord(
         account_id=str(token_config.get("account_id") or account.email),

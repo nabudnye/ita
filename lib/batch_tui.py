@@ -67,6 +67,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sub2api-password", help="Sub2API 管理员密码")
     parser.add_argument("--sub2api-group", "--group", dest="sub2api_group", help="Sub2API 分组 ID，多个用逗号")
     parser.add_argument("--model-whitelist", help="Sub2API model whitelist，多个用逗号")
+    parser.add_argument("--export-targets", help="注册导出目标：sub2api / cpa / sub2api,cpa / none")
+    parser.add_argument("--cpa-url", help="CLIProxyAPI base URL")
+    parser.add_argument("--cpa-management-key", help="CLIProxyAPI Management API key")
+    parser.add_argument("--cpa-note", help="CPA auth 文件备注")
     parser.add_argument("--no-sub2api", action="store_true", help="只获取 token，不推送 Sub2API")
 
     parser.add_argument("--artifact-dir", help="批量 artifact 根目录；默认 artifacts/batch_<timestamp>")
@@ -113,7 +117,27 @@ def _prompt_mode() -> str:
     return "register"
 
 
-def _config_namespace(args: argparse.Namespace, artifact_dir: Path, *, no_sub2api: bool) -> SimpleNamespace:
+def _prompt_export_targets(default: str = "sub2api") -> str:
+    print("请选择注册导出目标：")
+    print("1. Sub2API")
+    print("2. CPA")
+    print("3. Sub2API + CPA")
+    print("4. 仅生成 token")
+    value = input(f"导出目标 [{default}]: ").strip().lower()
+    if not value:
+        return default
+    if value in {"1", "sub2api", "s"}:
+        return "sub2api"
+    if value in {"2", "cpa", "c"}:
+        return "cpa"
+    if value in {"3", "both", "all", "sub2api,cpa", "s,c", "双导出"}:
+        return "sub2api,cpa"
+    if value in {"4", "none", "no", "token", "token-only", "仅生成token", "仅生成 token"}:
+        return "none"
+    return value
+
+
+def _config_namespace(args: argparse.Namespace, artifact_dir: Path, *, no_sub2api: bool, export_targets: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         idp_base=args.idp_base,
         idp_token=args.idp_token,
@@ -132,6 +156,10 @@ def _config_namespace(args: argparse.Namespace, artifact_dir: Path, *, no_sub2ap
         sub2api_password=args.sub2api_password,
         sub2api_group=args.sub2api_group,
         model_whitelist=args.model_whitelist,
+        export_targets=export_targets if export_targets is not None else args.export_targets,
+        cpa_url=getattr(args, "cpa_url", None),
+        cpa_management_key=getattr(args, "cpa_management_key", None),
+        cpa_note=getattr(args, "cpa_note", None),
         no_sub2api=no_sub2api,
         artifact_dir=str(artifact_dir),
         timeout=args.timeout,
@@ -348,12 +376,17 @@ def _apply_event(states: dict[int, TaskState], event: dict[str, Any], recent: li
         result = event.get("result") if isinstance(event.get("result"), dict) else {}
         account = result.get("account") if isinstance(result.get("account"), dict) else {}
         sub2api = result.get("sub2api") if isinstance(result.get("sub2api"), dict) else {}
+        exports = result.get("exports") if isinstance(result.get("exports"), dict) else {}
+        export_ids = []
+        for name, payload in exports.items():
+            if isinstance(payload, dict):
+                export_ids.append(f"{name}:{payload.get('remote_id') or '-'}")
         state.status = "SUCCESS"
         state.message = f"完成，第 {event.get('attempt')} 次尝试成功"
         state.finished_at = str(event.get("ts") or "")
         state.email = str(account.get("email") or result.get("email") or state.email)
         state.account_id = str(account.get("id") or result.get("idp_account_id") or state.account_id)
-        state.remote_id = str(sub2api.get("remote_id") or result.get("sub2api_id") or state.remote_id)
+        state.remote_id = ", ".join(export_ids) or str(sub2api.get("remote_id") or result.get("sub2api_id") or state.remote_id)
     elif kind == "attempt_failed":
         state.status = "RUNNING"
         state.message = f"第 {event.get('attempt')}/{event.get('max_attempts')} 次失败：{event.get('stage') or 'failed'}"
@@ -398,7 +431,7 @@ def _render(states: dict[int, TaskState], recent: list[str], *, artifact_root: P
         f"Artifacts: {artifact_root}",
         "-" * min(width, 140),
         "运行中任务:",
-        f"{'#':>4} {'状态':<8} {'账号ID':<8} {'邮箱':<34} {'Sub2API':<8}  当前步骤",
+        f"{'#':>4} {'状态':<8} {'账号ID':<8} {'邮箱':<34} {'导出ID/目标':<12}  当前步骤",
         "-" * min(width, 140),
     ]
     if running:
@@ -429,6 +462,17 @@ def _render(states: dict[int, TaskState], recent: list[str], *, artifact_root: P
 def _write_summary(artifact_root: Path, states: dict[int, TaskState], *, count: int, threads: int, retries: int, mode: str = "register") -> dict[str, Any]:
     counts = _status_counts(states)
     status = "success" if counts["FAILED"] == 0 and counts["SUCCESS"] == count else "partial_failed"
+    sub2api_success_count = 0
+    cpa_success_count = 0
+    partial_export_failures: list[dict[str, Any]] = []
+    for state in states.values():
+        remote = str(state.remote_id or "").lower()
+        if "sub2api:" in remote or (mode == "reauth" and state.status == "SUCCESS" and state.remote_id):
+            sub2api_success_count += 1
+        if "cpa:" in remote:
+            cpa_success_count += 1
+        if state.status == "FAILED" and state.account_id:
+            partial_export_failures.append({"index": state.index, "email": state.email, "account_id": state.account_id, "error": state.error})
     summary = {
         "status": status,
         "finished_at": utc_now_iso(),
@@ -439,6 +483,9 @@ def _write_summary(artifact_root: Path, states: dict[int, TaskState], *, count: 
         "artifact_dir": str(artifact_root),
         "success_count": counts["SUCCESS"],
         "failed_count": counts["FAILED"],
+        "sub2api_success_count": sub2api_success_count,
+        "cpa_success_count": cpa_success_count,
+        "partial_export_failures": partial_export_failures,
         "tasks": [
             {
                 "index": state.index,
@@ -464,6 +511,8 @@ def _print_summary(summary: dict[str, Any]) -> None:
     print(f"总任务数: {summary.get('count')}")
     print(f"成功数量: {summary.get('success_count')}")
     print(f"失败数量: {summary.get('failed_count')}")
+    print(f"Sub2API 成功数: {summary.get('sub2api_success_count', 0)}")
+    print(f"CPA 成功数: {summary.get('cpa_success_count', 0)}")
     print(f"线程数量: {summary.get('threads')}")
     print(f"单任务最大重试: {summary.get('retries')}")
     print(f"结果目录: {summary.get('artifact_dir')}")
@@ -477,6 +526,12 @@ def _print_summary(summary: dict[str, Any]) -> None:
             print(f"- #{int(item.get('index') or 0):04d} account={item.get('account_id') or '-'} email={item.get('email') or '-'} error={item.get('error') or '-'}")
         if len(failed) > 20:
             print(f"... 还有 {len(failed) - 20} 个失败任务，详见 summary.json")
+    partial = summary.get("partial_export_failures") if isinstance(summary.get("partial_export_failures"), list) else []
+    if partial:
+        print()
+        print("部分导出失败任务:")
+        for item in partial[:20]:
+            print(f"- #{int(item.get('index') or 0):04d} account={item.get('account_id') or '-'} email={item.get('email') or '-'} error={item.get('error') or '-'}")
 
 
 def run_batch(base_cfg: RuntimeConfig, *, count: int, threads: int, artifact_root: Path, retries: int = 5) -> dict[str, Any]:
@@ -589,7 +644,10 @@ def main(argv: list[str] | None = None) -> int:
             print("说明：每个账号会独立生成、授权并写入独立 artifact；真实运行会消耗 IDP 点数。")
             args.count = _prompt_int("需要生成的账号数量", default=args.count or 1, minimum=1)
             args.threads = _prompt_int("启动线程数", default=args.threads or min(3, args.count), minimum=1, maximum=args.count)
-            args.no_sub2api = not _prompt_yes_no("是否推送到 Sub2API", default=not args.no_sub2api)
+            load_dotenv()
+            default_targets = args.export_targets or env_first("EXPORT_TARGETS", default=("none" if args.no_sub2api else "sub2api"))
+            args.export_targets = _prompt_export_targets(default=default_targets)
+            args.no_sub2api = str(args.export_targets or "").strip().lower() in {"none", "no", "false", "off", "token", "token-only"}
         else:
             load_dotenv()
             default_group = str(args.sub2api_group or env_first("SUB2API_GROUP", default="5") or "5")
@@ -610,8 +668,9 @@ def main(argv: list[str] | None = None) -> int:
     if not artifact_root.is_absolute():
         artifact_root = PROJECT_ROOT / artifact_root
 
-    cfg_args = _config_namespace(args, artifact_root, no_sub2api=bool(args.no_sub2api))
     try:
+        forced_targets = None if args.mode == "register" else "sub2api"
+        cfg_args = _config_namespace(args, artifact_root, no_sub2api=bool(args.no_sub2api) and args.mode == "register", export_targets=forced_targets)
         base_cfg = RuntimeConfig.from_env_and_args(cfg_args)
         base_cfg.validate()
         if args.mode == "register":
@@ -619,7 +678,7 @@ def main(argv: list[str] | None = None) -> int:
             threads = max(1, min(int(args.threads or 1), count))
             if not args.yes:
                 print(f"即将生成 {count} 个账号，并发线程 {threads}，artifact: {artifact_root}")
-                print(f"Sub2API: {'关闭' if args.no_sub2api else '开启'}；纯协议失败重试: {max(1, int(args.retries or 5))} 次")
+                print(f"导出目标: {','.join(base_cfg.selected_export_targets) or 'none'}；纯协议失败重试: {max(1, int(args.retries or 5))} 次")
                 if not _prompt_yes_no("确认启动", default=False):
                     print("已取消")
                     return 2
