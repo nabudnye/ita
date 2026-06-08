@@ -95,7 +95,7 @@ python3 scripts/run_idp_codex.py --account-id 1638 --timeout 60
 python3 scripts/run_idp_codex.py --timeout 60 --no-sub2api
 ```
 
-## 批量 TUI
+## 统一 TUI
 
 交互式：
 
@@ -103,22 +103,47 @@ python3 scripts/run_idp_codex.py --timeout 60 --no-sub2api
 python3 scripts/run_batch_tui.py
 ```
 
-非交互：
+进入后先选择模块：
+
+```text
+1. 注册账号
+2. 重新补授权
+```
+
+注册账号非交互：
 
 ```bash
-python3 scripts/run_batch_tui.py --count 10 --threads 3 --yes
+python3 scripts/run_batch_tui.py --mode register --count 10 --threads 3 --yes
 ```
 
 指定重试次数：
 
 ```bash
-python3 scripts/run_batch_tui.py --count 10 --threads 3 --retries 5 --yes
+python3 scripts/run_batch_tui.py --mode register --count 10 --threads 3 --retries 5 --yes
 ```
 
 只跑 OAuth，不推送：
 
 ```bash
-python3 scripts/run_batch_tui.py --count 5 --threads 2 --no-sub2api --yes
+python3 scripts/run_batch_tui.py --mode register --count 5 --threads 2 --no-sub2api --yes
+```
+
+重新补授权非交互：
+
+```bash
+python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
+```
+
+重新补授权只处理前 5 个错误账号：
+
+```bash
+python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --limit 5 --yes
+```
+
+重新补授权指定单个 Sub2API 账号：
+
+```bash
+python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 1 --account-id 5162 --yes
 ```
 
 ## Sub2API 分组错误账号检测
@@ -147,10 +172,11 @@ python3 scripts/check_sub2api_group.py --group 5 --json --output artifacts/sub2a
 python3 scripts/reauthorize_sub2api_errors.py --group 5
 ```
 
-确认后实际重新授权并更新原 Sub2API 账号：
+确认后实际重新授权并更新原 Sub2API 账号，也可以用统一 TUI：
 
 ```bash
 python3 scripts/reauthorize_sub2api_errors.py --group 5 --apply
+python3 scripts/run_batch_tui.py --mode reauth --group 5 --threads 3 --yes
 ```
 
 重新授权成功后会自动执行：
