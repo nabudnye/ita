@@ -33,6 +33,41 @@ IDP API 点数需要联系 @该隐 购买。
 - 纯 HTTP 协议流程；无浏览器 fallback。
 - 日志和 artifact 默认脱敏。
 
+## 快速使用步骤
+
+1. 复制环境变量模板：
+
+   ```bash
+   cp .env.example .env
+   ```
+
+2. 编辑 `.env`，填写 IDP 和 Sub2API 配置：
+
+   ```env
+   IDP_TOKEN=
+   SUB2API_URL=
+   SUB2API_EMAIL=
+   SUB2API_PASSWORD=
+   SUB2API_GROUP=5
+   ```
+
+3. 启动 TUI：
+
+   ```bash
+   python3 scripts/run_batch_tui.py
+   ```
+
+4. 根据 TUI 选择模块：
+
+   ```text
+   1. 注册账号
+   2. 重新补授权
+   ```
+
+## 运行截图
+
+<img src="docs/assets/tui_running.png" alt="Idp Team Automation TUI 运行截图" width="900">
+
 ## 安装
 
 ```bash
@@ -260,4 +295,9 @@ lib/
 ├── sub2api_health.py   # Sub2API 分组账号状态检测
 ├── sso_http_flow.py    # 纯 HTTP SSO/OAuth 主流程
 └── sub2api_export.py   # Sub2API 导出
+
+docs/assets/
+├── cain_qr.jpg         # @该隐二维码
+├── pu_shengyou_qr.jpg  # @朴圣佑二维码
+└── tui_running.png     # TUI 运行截图
 ```
